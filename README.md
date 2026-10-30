@@ -6,16 +6,23 @@ más información operativa.
 ## Archivos
 - `app.py` – la aplicación Streamlit
 - `requirements.txt` – dependencias
-- `Septiembre.xlsx` – archivo por defecto (si no cargás otro, se usa este)
+- `datos/` – carpeta con los Excel/CSV del export; **todos los archivos de esta carpeta se acumulan automáticamente**
+  (ya incluye `Septiembre.xlsx`)
 
 ## Ejecutar
     pip install -r requirements.txt
     streamlit run app.py
 
 ## Desplegar en Streamlit Community Cloud
-1. Subí los tres archivos a la raíz de un repositorio de GitHub.
+1. Subí `app.py`, `requirements.txt`, `README.md` y la carpeta `datos/` a un repositorio de GitHub.
 2. En share.streamlit.io creá la app apuntando a `app.py`.
-3. Para otros meses, cargá los Excel desde el dashboard (se pueden subir varios a la vez y se acumulan).
+
+## Agregar más meses
+- **Fijo (recomendado):** copiá el nuevo Excel en `datos/` (nombre libre, por ejemplo `2026-10.xlsx`),
+  subilo a GitHub y la app lo suma sola. Streamlit Cloud se actualiza al hacer el commit.
+- **Temporal:** cargalo desde el dashboard; se suma a los de la carpeta mientras dure la sesión.
+- Los archivos se leen en orden alfabético y los cargados desde el dashboard van al final. Si una visita
+  aparece en dos archivos, queda la del último; conviene nombrarlos con fecha (`2026-09.xlsx`, `2026-10.xlsx`).
 
 ## Reglas de cálculo
 - Se evalúan solo visitas con hora de arribo (`FECHA_INICIO_VISITA`).

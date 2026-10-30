@@ -23,7 +23,7 @@ import streamlit.components.v1 as components
 OBJETIVO = 88.0                    # % objetivo de notificación > 2 min
 OBJETIVO_RADIO_DEFECTO = 95        # % objetivo de adherencia al radio (editable en la barra lateral)
 HORA_INICIO_GRAFICO = 7            # el gráfico por hora arranca a las 7:00
-ARCHIVO_DEFECTO = "Septiembre.xlsx"
+CARPETA_DATOS = Path(__file__).parent / "datos"   # todos los Excel/CSV de esta carpeta se acumulan solos
 ESTADOS_VISITA = ["CONCLUDED", "DEFINITELY_RETURNED", "PARTIAL_DELIVERY"]   # visitas con resultado final
 
 # Columnas del export -> nombres internos
@@ -354,18 +354,24 @@ sub_side = st.sidebar.file_uploader("📂 Cargar archivos (uno o varios)", type=
 sub_main = st.file_uploader("📂 Cargar archivos acumulados (Excel o CSV, podés subir varios meses)",
                             type=tipos, accept_multiple_files=True, key="up_main")
 
+usar_carpeta = st.sidebar.checkbox("Incluir archivos de la carpeta datos/", value=True)
+
 subidos, vistos = [], set()
 for a in list(sub_main or []) + list(sub_side or []):
     if (a.name, a.size) not in vistos:
         vistos.add((a.name, a.size))
         subidos.append((a.name, a.getvalue()))
 
-if subidos:
-    archivos = tuple(subidos)
-elif Path(ARCHIVO_DEFECTO).exists():
-    archivos = ((ARCHIVO_DEFECTO, Path(ARCHIVO_DEFECTO).read_bytes()),)
-else:
-    st.info("Cargá un archivo de Excel o CSV (export acumulado) para comenzar.")
+# Archivos guardados en el repositorio (carpeta datos/), en orden alfabético; los cargados van al final
+de_carpeta = []
+if usar_carpeta and CARPETA_DATOS.exists():
+    for ruta in sorted(CARPETA_DATOS.iterdir()):
+        if ruta.suffix.lower() in (".xlsx", ".xls", ".csv") and not ruta.name.startswith(("~$", ".")):
+            de_carpeta.append((ruta.name, ruta.read_bytes()))
+
+archivos = tuple(de_carpeta + subidos)
+if not archivos:
+    st.info("No hay datos: poné los Excel/CSV del export en la carpeta datos/ del proyecto o cargalos acá arriba.")
     st.stop()
 
 try:
@@ -374,6 +380,7 @@ except Exception as e:
     st.error(f"No se pudo procesar el archivo: {e}")
     st.stop()
 
+resumen_archivos["Origen"] = ["Carpeta datos/"] * len(de_carpeta) + ["Cargado"] * len(subidos)
 texto_origen = f"{len(resumen_archivos)} archivo(s) · {len(datos):,} visitas".replace(",", ".")
 if n_dup:
     texto_origen += f" · {n_dup} repetidas descartadas"
