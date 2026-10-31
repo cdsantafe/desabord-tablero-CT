@@ -344,12 +344,12 @@ def pct(serie: pd.Series) -> float:
 # ----------------------------------------------------------------------
 # Encabezado y carga de archivos
 # ----------------------------------------------------------------------
-st.markdown('<p class="titulo">TAREA CRÍTICA: NOTIFICACIÓN AL CLIENTE</p>', unsafe_allow_html=True)
-st.markdown(f'<p class="subtitulo">Objetivo: {OBJETIVO:.0f}% de los clientes notificados con más de 2 minutos '
-            'de anticipación · Vista acumulada</p>', unsafe_allow_html=True)
+st.markdown('<p class="titulo">DASHBOARD CD SANTA FE</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitulo">Notificación al cliente · Adherencia al radio · Operación · Vista acumulada</p>',
+            unsafe_allow_html=True)
 
 # Filtros desplegables arriba de todo (sin barra lateral) y, debajo, archivos y opciones extra
-fila = st.columns(4)
+fila = st.columns([1, 1, 1, 1, 1, 1])
 exp = st.expander("⚙️ Archivos y más opciones")
 with exp:
     usar_carpeta = st.checkbox("Incluir archivos de la carpeta datos/", value=True)
@@ -402,26 +402,28 @@ def rotulo(claves, nombre):
     return f"{nombre} " + (", ".join(map(str, n)) if len(n) <= 6 else f"{n[0]} a {n[-1]}")
 
 
-# Cuatro filtros desplegables (vacío = todos)
-sel_fecha = fila[0].multiselect("📅 Fecha", sorted(datos["fecha"].dt.date.unique()),
-                                format_func=lambda x: f"{x:%d/%m/%Y}", placeholder="Todas")
-sel_sem = fila[1].multiselect("Semana (nº)", sorted(datos["clave_sem"].unique()),
-                              format_func=etq_sem, placeholder="Todas")
-sel_mes = fila[2].multiselect("Mes (nº)", sorted(datos["clave_mes"].unique()),
+# Filtros desplegables (vacío = todos) + frecuencia de los gráficos
+sel_anio = fila[0].multiselect("Año", sorted(datos["fecha"].dt.year.unique()), placeholder="Todos")
+sel_mes = fila[1].multiselect("Mes (nº)", sorted(datos["clave_mes"].unique()),
                               format_func=etq_mes, placeholder="Todos")
-sel_ch = fila[3].multiselect("Chofer", sorted(datos["chofer"].unique()), placeholder="Todos")
+sel_sem = fila[2].multiselect("Semana (nº)", sorted(datos["clave_sem"].unique()),
+                              format_func=etq_sem, placeholder="Todas")
+sel_fecha = fila[3].multiselect("📅 Fecha", sorted(datos["fecha"].dt.date.unique()),
+                                format_func=lambda x: f"{x:%d/%m/%Y}", placeholder="Todas")
+sel_ch = fila[4].multiselect("Chofer", sorted(datos["chofer"].unique()), placeholder="Todos")
+frecuencia = fila[5].selectbox("Frecuencia de los gráficos", ["Diario", "Semanal", "Mensual"])
 
 with exp:
     st.caption(texto_origen)
     st.dataframe(resumen_archivos, use_container_width=True, hide_index=True)
-    frecuencia = st.radio("Frecuencia de los gráficos de evolución", ["Diario", "Semanal", "Mensual"],
-                          horizontal=True)
     c_o = st.columns(3)
     sel_seg = c_o[0].multiselect("Segmento de venta", sorted(datos["segmento"].unique()), placeholder="Todos")
     sel_pl = c_o[1].multiselect("Planilla", sorted(datos["planilla"].unique()), placeholder="Todas")
     objetivo_radio = c_o[2].number_input("Objetivo % adherencia al radio", 0, 100, OBJETIVO_RADIO_DEFECTO, 1)
 
 mask = pd.Series(True, index=datos.index)
+if sel_anio:
+    mask &= datos["fecha"].dt.year.isin(sel_anio)
 if sel_fecha:
     mask &= datos["fecha"].dt.date.isin(sel_fecha)
 if sel_sem:
@@ -434,14 +436,42 @@ if sel_seg:
     mask &= datos["segmento"].isin(sel_seg)
 if sel_pl:
     mask &= datos["planilla"].isin(sel_pl)
-f = datos[mask].copy()                          # todas las visitas filtradas
-d = f[f["arribo"].notna()].copy()               # visitas con hora de arribo (se evalúan)
-if d.empty:
+f0 = asignar_periodo(datos[mask].copy(), frecuencia)      # visitas filtradas (todos los períodos)
+d0 = f0[f0["arribo"].notna()].copy()                       # con hora de arribo: base de los gráficos seleccionables
+if d0.empty:
     st.info("Sin visitas con hora de arribo para los filtros seleccionados.")
     st.stop()
-d = asignar_periodo(d, frecuencia)
+
+
+def puntos_sel(key):
+    """Períodos (eje x) de los puntos seleccionados en un gráfico."""
+    try:
+        return [str(p["x"]) for p in st.session_state[key]["selection"]["points"] if "x" in p]
+    except Exception:
+        return []
+
+
+def limpiar_seleccion():
+    st.session_state["ver_sel"] = st.session_state.get("ver_sel", 0) + 1
+
+
+ver = st.session_state.get("ver_sel", 0)
+K_NOTIF, K_RADIO, K_HEAT = (f"sel_{n}_{frecuencia}_{ver}" for n in ("notif", "radio", "heat"))
+sel_per = sorted(set(puntos_sel(K_NOTIF) + puntos_sel(K_RADIO) + puntos_sel(K_HEAT)))
+f = f0
+if sel_per:                                                # clic en un punto de un gráfico => filtra las tablas
+    f = f0[f0["periodo"].isin(sel_per)].copy()
+    ci = st.columns([5, 1])
+    ci[0].info(f"Filtrando por período: {', '.join(sel_per)}  (clic en otro punto para cambiar)")
+    ci[1].button("Limpiar selección", on_click=limpiar_seleccion)
+d = f[f["arribo"].notna()].copy()
+if d.empty:
+    st.info("El período seleccionado no tiene visitas con hora de arribo.")
+    st.stop()
 
 partes = []
+if sel_anio:
+    partes.append("Año " + ", ".join(map(str, sel_anio)))
 if sel_fecha:
     partes.append(", ".join(f"{x:%d/%m/%Y}" for x in sel_fecha) if len(sel_fecha) <= 3
                   else f"{min(sel_fecha):%d/%m/%Y} - {max(sel_fecha):%d/%m/%Y}")
@@ -449,6 +479,8 @@ if sel_sem:
     partes.append(rotulo(sel_sem, "Semanas"))
 if sel_mes:
     partes.append(rotulo(sel_mes, "Meses"))
+if sel_per:
+    partes.append(", ".join(sel_per) if len(sel_per) <= 4 else f"{len(sel_per)} períodos")
 etiqueta = " · ".join(partes) or f"{d['fecha'].min():%d/%m/%Y} - {d['fecha'].max():%d/%m/%Y}"
 g2, g5 = pct(d["cumple_2"]), pct(d["cumple_5"])
 
@@ -530,7 +562,7 @@ with tab1:
 # Evolución
 # ----------------------------------------------------------------------
 with tab2:
-    evo = (d.groupby("periodo")
+    evo = (d0.groupby("periodo")
              .agg(**{"% > 2 min": ("cumple_2", "mean"), "% > 5 min": ("cumple_5", "mean")})
              .mul(100).reset_index())
     fig = px.line(evo.melt("periodo", var_name="Métrica", value_name="%"),
@@ -538,7 +570,9 @@ with tab2:
                   color_discrete_sequence=["#D32F2F", "#F9A825"])
     fig.add_hline(y=OBJETIVO, line_dash="dash", line_color="green", annotation_text=f"Objetivo {OBJETIVO:.0f}%")
     fig.update_layout(yaxis_range=[0, 105], xaxis_title=frecuencia, yaxis_title="% cumplimiento")
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_xaxes(type="category")
+    st.caption("Hacé clic en un punto del gráfico para filtrar todas las tablas por ese período.")
+    st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points", key=K_NOTIF)
 
     st.subheader(f"Evolución según la hora del día (desde las {HORA_INICIO_GRAFICO}:00)")
     hor = (d[d["hora"] >= HORA_INICIO_GRAFICO].groupby("hora")
@@ -560,15 +594,15 @@ with tab2:
         fig_v.update_layout(height=220, xaxis_title=None, yaxis_title="Visitas evaluadas")
         st.plotly_chart(fig_v, use_container_width=True)
 
-    st.subheader("Mapa de calor: cumplimiento por chofer y día")
+    st.subheader("Mapa de calor: cumplimiento por chofer y período")
     metrica = st.radio("Indicador", ["% > 2 min", "% > 5 min"], horizontal=True, key="mc_metrica")
     col_m = "cumple_2" if metrica == "% > 2 min" else "cumple_5"
-    piv = d.pivot_table(index="chofer", columns="fecha", values=col_m, aggfunc="mean") * 100
-    piv.columns = [c.strftime("%d/%m") for c in piv.columns]
+    piv = d0.pivot_table(index="chofer", columns="periodo", values=col_m, aggfunc="mean") * 100
     fig_m = px.imshow(piv, color_continuous_scale=["#C62828", "#FFF176", "#2E7D32"], zmin=50, zmax=100,
                       aspect="auto", text_auto=".0f", labels={"color": "%"})
     fig_m.update_layout(height=140 + 24 * len(piv), xaxis_title=None, yaxis_title=None)
-    st.plotly_chart(fig_m, use_container_width=True)
+    fig_m.update_xaxes(type="category")
+    st.plotly_chart(fig_m, use_container_width=True, on_select="rerun", selection_mode="points", key=K_HEAT)
 
 # ----------------------------------------------------------------------
 # Visitas que no cumplieron 2 minutos
@@ -623,15 +657,18 @@ with tab4:
         except Exception as e:
             bj.warning(f"No se pudo generar la imagen: {e}")
 
-        st.subheader("Evolución diaria de la adherencia al radio")
-        evo_r = r.groupby("fecha")["en_radio_ini"].mean().mul(100).reset_index(name="% adherencia al radio")
-        evo_r["Día"] = evo_r["fecha"].dt.strftime("%d/%m")
-        fig_r = px.line(evo_r, x="Día", y="% adherencia al radio", markers=True, color_discrete_sequence=["#D32F2F"])
+        st.subheader(f"Evolución de la adherencia al radio ({frecuencia.lower()})")
+        r0 = d0[d0["inicio_viaje"].notna() & d0["en_radio_ini"].notna()]
+        evo_r = r0.groupby("periodo")["en_radio_ini"].mean().mul(100).reset_index(name="% adherencia al radio")
+        fig_r = px.line(evo_r, x="periodo", y="% adherencia al radio", markers=True,
+                        color_discrete_sequence=["#D32F2F"])
         fig_r.add_hline(y=objetivo_radio, line_dash="dash", line_color="green",
                         annotation_text=f"Objetivo {objetivo_radio}%")
         piso = max(0, min(evo_r["% adherencia al radio"].min(), objetivo_radio) - 5)
-        fig_r.update_layout(yaxis_range=[piso, 101], xaxis_title=None, yaxis_title="% adherencia al radio")
-        st.plotly_chart(fig_r, use_container_width=True)
+        fig_r.update_layout(yaxis_range=[piso, 101], xaxis_title=frecuencia, yaxis_title="% adherencia al radio")
+        fig_r.update_xaxes(type="category")
+        st.caption("Hacé clic en un punto para filtrar todas las tablas por ese período.")
+        st.plotly_chart(fig_r, use_container_width=True, on_select="rerun", selection_mode="points", key=K_RADIO)
 
         fuera = r[r["en_radio_ini"] == 0]
         if not fuera.empty:
