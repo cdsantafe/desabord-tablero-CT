@@ -61,6 +61,8 @@ st.markdown(
     <style>
     .titulo {color:#D32F2F; font-size:2.4rem; font-weight:800; margin-bottom:0; letter-spacing:.5px;}
     .subtitulo {color:#444; font-size:1.2rem; font-weight:600; margin-top:0;}
+    .st-key-barra_filtros {position: sticky; top: 3.75rem; z-index: 999; background: #ffffff;
+                           padding: .4rem .2rem .1rem .2rem; border-bottom: 2px solid #FFC933;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -349,7 +351,8 @@ st.markdown('<p class="subtitulo">Notificación al cliente · Adherencia al radi
             unsafe_allow_html=True)
 
 # Filtros desplegables arriba de todo (sin barra lateral) y, debajo, archivos y opciones extra
-fila = st.columns([1, 1, 1, 1, 1, 1])
+with st.container(key="barra_filtros"):      # barra superior que queda fija al desplazarse
+    fila = st.columns([1, 1, 1, 1, 1, 1])
 exp = st.expander("⚙️ Archivos y más opciones")
 with exp:
     usar_carpeta = st.checkbox("Incluir archivos de la carpeta datos/", value=True)
@@ -598,6 +601,16 @@ with tab2:
     metrica = st.radio("Indicador", ["% > 2 min", "% > 5 min"], horizontal=True, key="mc_metrica")
     col_m = "cumple_2" if metrica == "% > 2 min" else "cumple_5"
     piv = d0.pivot_table(index="chofer", columns="periodo", values=col_m, aggfunc="mean") * 100
+    oc1, oc2 = st.columns(2)
+    orden_por = oc1.selectbox("Ordenar choferes por", ["Chofer", "Promedio general"] + list(piv.columns),
+                              key="mc_ordenar")
+    asc = oc2.radio("Orden", ["Decreciente", "Creciente"], horizontal=True, key="mc_sentido") == "Creciente"
+    if orden_por == "Chofer":
+        piv = piv.sort_index(ascending=asc)
+    elif orden_por == "Promedio general":
+        piv = piv.loc[piv.mean(axis=1).sort_values(ascending=asc).index]
+    else:
+        piv = piv.sort_values(orden_por, ascending=asc, na_position="last")
     fig_m = px.imshow(piv, color_continuous_scale=["#C62828", "#FFF176", "#2E7D32"], zmin=50, zmax=100,
                       aspect="auto", text_auto=".0f", labels={"color": "%"})
     fig_m.update_layout(height=140 + 24 * len(piv), xaxis_title=None, yaxis_title=None)
@@ -664,8 +677,8 @@ with tab4:
                         color_discrete_sequence=["#D32F2F"])
         fig_r.add_hline(y=objetivo_radio, line_dash="dash", line_color="green",
                         annotation_text=f"Objetivo {objetivo_radio}%")
-        piso = max(0, min(evo_r["% adherencia al radio"].min(), objetivo_radio) - 5)
-        fig_r.update_layout(yaxis_range=[piso, 101], xaxis_title=frecuencia, yaxis_title="% adherencia al radio")
+        fig_r.update_layout(yaxis_range=[0, 102], xaxis_title=frecuencia, yaxis_title="% adherencia al radio")
+        fig_r.update_yaxes(tickvals=list(range(0, 101, 20)))
         fig_r.update_xaxes(type="category")
         st.caption("Hacé clic en un punto para filtrar todas las tablas por ese período.")
         st.plotly_chart(fig_r, use_container_width=True, on_select="rerun", selection_mode="points", key=K_RADIO)
@@ -753,10 +766,6 @@ with tab7:
     st.caption("Tiempo entre FECHA_INICIO_VISITA y FECHA_FIN_VISITA registrados en la app. Indicador de seguimiento, "
                "a mejorar a futuro con un evento más cercano a la entrega real.")
     tv = d[d["fin_visita"].notna() & (d["t_visita_min"] >= 0)].copy()
-    tope = st.number_input("Excluir visitas de más de (min), posibles errores de registro",
-                           1, 1440, 180, 10, key="tv_tope")
-    n_exc = int((tv["t_visita_min"] > tope).sum())
-    tv = tv[tv["t_visita_min"] <= tope].copy()
     tv["etq_cli"] = tv["cod_cliente"] + " - " + tv["cliente"].astype(str)
 
     vista = st.radio("Ver por", ["Chofer", "Cliente"], horizontal=True, key="tv_vista")
@@ -784,7 +793,7 @@ with tab7:
         c[0].metric("Visitas medidas", f"{len(tv):,}".replace(",", "."))
         c[1].metric("Promedio (mm:ss)", mmss(tv["t_visita_min"].mean()))
         c[2].metric("Clientes", tv["etq_cli"].nunique())
-        c[3].metric("Excluidas por el tope", n_exc)
+        c[3].metric("Máximo (min)", f"{tv['t_visita_min'].max():.0f}")
 
         cfg_t = {"Visitas": st.column_config.NumberColumn(format="%d"),
                  "Promedio (min)": st.column_config.NumberColumn(format="%.2f"),
