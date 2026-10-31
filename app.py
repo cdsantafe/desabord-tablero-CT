@@ -348,19 +348,14 @@ st.markdown('<p class="titulo">TAREA CRÍTICA: NOTIFICACIÓN AL CLIENTE</p>', un
 st.markdown(f'<p class="subtitulo">Objetivo: {OBJETIVO:.0f}% de los clientes notificados con más de 2 minutos '
             'de anticipación · Vista acumulada</p>', unsafe_allow_html=True)
 
-tipos = ["xlsx", "xls", "csv"]
-sub_side = st.sidebar.file_uploader("📂 Cargar archivos (uno o varios)", type=tipos,
-                                    accept_multiple_files=True, key="up_side")
-sub_main = st.file_uploader("📂 Cargar archivos acumulados (Excel o CSV, podés subir varios meses)",
-                            type=tipos, accept_multiple_files=True, key="up_main")
-
-usar_carpeta = st.sidebar.checkbox("Incluir archivos de la carpeta datos/", value=True)
-
-subidos, vistos = [], set()
-for a in list(sub_main or []) + list(sub_side or []):
-    if (a.name, a.size) not in vistos:
-        vistos.add((a.name, a.size))
-        subidos.append((a.name, a.getvalue()))
+# Filtros desplegables arriba de todo (sin barra lateral) y, debajo, archivos y opciones extra
+fila = st.columns(4)
+exp = st.expander("⚙️ Archivos y más opciones")
+with exp:
+    usar_carpeta = st.checkbox("Incluir archivos de la carpeta datos/", value=True)
+    sub_main = st.file_uploader("📂 Cargar archivos (Excel o CSV, uno o varios)",
+                                type=["xlsx", "xls", "csv"], accept_multiple_files=True, key="up_main")
+subidos = [(a.name, a.getvalue()) for a in (sub_main or [])]
 
 # Archivos guardados en el repositorio (carpeta datos/), en orden alfabético; los cargados van al final
 de_carpeta = []
@@ -371,7 +366,8 @@ if usar_carpeta and CARPETA_DATOS.exists():
 
 archivos = tuple(de_carpeta + subidos)
 if not archivos:
-    st.info("No hay datos: poné los Excel/CSV del export en la carpeta datos/ del proyecto o cargalos acá arriba.")
+    st.info("No hay datos: poné los Excel/CSV del export en la carpeta datos/ del proyecto o cargalos en "
+            "'Archivos y más opciones'.")
     st.stop()
 
 try:
@@ -384,15 +380,6 @@ resumen_archivos["Origen"] = ["Carpeta datos/"] * len(de_carpeta) + ["Cargado"] 
 texto_origen = f"{len(resumen_archivos)} archivo(s) · {len(datos):,} visitas".replace(",", ".")
 if n_dup:
     texto_origen += f" · {n_dup} repetidas descartadas"
-st.caption(texto_origen)
-with st.expander("Archivos incluidos"):
-    st.dataframe(resumen_archivos, use_container_width=True, hide_index=True)
-
-# ----------------------------------------------------------------------
-# Filtros (sidebar)
-# ----------------------------------------------------------------------
-st.sidebar.header("Filtros")
-frecuencia = st.sidebar.radio("Frecuencia", ["Diario", "Semanal", "Mensual"], horizontal=True)
 
 MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
             "octubre", "noviembre", "diciembre"]
@@ -415,36 +402,36 @@ def rotulo(claves, nombre):
     return f"{nombre} " + (", ".join(map(str, n)) if len(n) <= 6 else f"{n[0]} a {n[-1]}")
 
 
-modo = st.sidebar.radio("Filtrar por", ["Rango de fechas", "Semanas", "Meses"], horizontal=True)
-f_min, f_max = datos["fecha"].min().date(), datos["fecha"].max().date()
-if modo == "Rango de fechas":
-    rango = st.sidebar.date_input("Fecha / rango", value=(f_min, f_max), min_value=f_min, max_value=f_max)
-    if isinstance(rango, tuple) and len(rango) == 2:
-        desde, hasta = rango
-    else:
-        desde = hasta = rango[0] if isinstance(rango, tuple) else rango
-elif modo == "Semanas":
-    op_sem = sorted(datos["clave_sem"].unique())
-    sel_sem = st.sidebar.multiselect("Semanas completas (nº)", op_sem, default=op_sem, format_func=etq_sem)
-else:
-    op_mes = sorted(datos["clave_mes"].unique())
-    sel_mes = st.sidebar.multiselect("Meses completos (nº)", op_mes, default=op_mes, format_func=etq_mes)
+# Cuatro filtros desplegables (vacío = todos)
+sel_fecha = fila[0].multiselect("📅 Fecha", sorted(datos["fecha"].dt.date.unique()),
+                                format_func=lambda x: f"{x:%d/%m/%Y}", placeholder="Todas")
+sel_sem = fila[1].multiselect("Semana (nº)", sorted(datos["clave_sem"].unique()),
+                              format_func=etq_sem, placeholder="Todas")
+sel_mes = fila[2].multiselect("Mes (nº)", sorted(datos["clave_mes"].unique()),
+                              format_func=etq_mes, placeholder="Todos")
+sel_ch = fila[3].multiselect("Chofer", sorted(datos["chofer"].unique()), placeholder="Todos")
 
-choferes = sorted(datos["chofer"].unique())
-sel_ch = st.sidebar.multiselect("Chofer", choferes, default=choferes)
-segmentos = sorted(datos["segmento"].unique())
-sel_seg = st.sidebar.multiselect("Segmento de venta", segmentos, default=segmentos)
-planillas = sorted(datos["planilla"].unique())
-sel_pl = st.sidebar.multiselect("Planilla (vacío = todas)", planillas, default=[])
-objetivo_radio = st.sidebar.number_input("Objetivo % adherencia al radio", 0, 100, OBJETIVO_RADIO_DEFECTO, 1)
+with exp:
+    st.caption(texto_origen)
+    st.dataframe(resumen_archivos, use_container_width=True, hide_index=True)
+    frecuencia = st.radio("Frecuencia de los gráficos de evolución", ["Diario", "Semanal", "Mensual"],
+                          horizontal=True)
+    c_o = st.columns(3)
+    sel_seg = c_o[0].multiselect("Segmento de venta", sorted(datos["segmento"].unique()), placeholder="Todos")
+    sel_pl = c_o[1].multiselect("Planilla", sorted(datos["planilla"].unique()), placeholder="Todas")
+    objetivo_radio = c_o[2].number_input("Objetivo % adherencia al radio", 0, 100, OBJETIVO_RADIO_DEFECTO, 1)
 
-if modo == "Rango de fechas":
-    mask = (datos["fecha"].dt.date >= desde) & (datos["fecha"].dt.date <= hasta)
-elif modo == "Semanas":
-    mask = datos["clave_sem"].isin(sel_sem)
-else:
-    mask = datos["clave_mes"].isin(sel_mes)
-mask &= datos["chofer"].isin(sel_ch) & datos["segmento"].isin(sel_seg)
+mask = pd.Series(True, index=datos.index)
+if sel_fecha:
+    mask &= datos["fecha"].dt.date.isin(sel_fecha)
+if sel_sem:
+    mask &= datos["clave_sem"].isin(sel_sem)
+if sel_mes:
+    mask &= datos["clave_mes"].isin(sel_mes)
+if sel_ch:
+    mask &= datos["chofer"].isin(sel_ch)
+if sel_seg:
+    mask &= datos["segmento"].isin(sel_seg)
 if sel_pl:
     mask &= datos["planilla"].isin(sel_pl)
 f = datos[mask].copy()                          # todas las visitas filtradas
@@ -454,12 +441,15 @@ if d.empty:
     st.stop()
 d = asignar_periodo(d, frecuencia)
 
-if modo == "Rango de fechas":
-    etiqueta = f"{desde:%d/%m/%Y}" if desde == hasta else f"{desde:%d/%m/%Y} - {hasta:%d/%m/%Y}"
-elif modo == "Semanas":
-    etiqueta = rotulo(sel_sem, "Semanas")
-else:
-    etiqueta = rotulo(sel_mes, "Meses")
+partes = []
+if sel_fecha:
+    partes.append(", ".join(f"{x:%d/%m/%Y}" for x in sel_fecha) if len(sel_fecha) <= 3
+                  else f"{min(sel_fecha):%d/%m/%Y} - {max(sel_fecha):%d/%m/%Y}")
+if sel_sem:
+    partes.append(rotulo(sel_sem, "Semanas"))
+if sel_mes:
+    partes.append(rotulo(sel_mes, "Meses"))
+etiqueta = " · ".join(partes) or f"{d['fecha'].min():%d/%m/%Y} - {d['fecha'].max():%d/%m/%Y}"
 g2, g5 = pct(d["cumple_2"]), pct(d["cumple_5"])
 
 # Tabla de notificación por chofer (GENERAL arriba)
@@ -633,16 +623,14 @@ with tab4:
         except Exception as e:
             bj.warning(f"No se pudo generar la imagen: {e}")
 
-        st.subheader(f"Evolución de la adherencia al radio ({frecuencia.lower()})")
-        cols_r = ["% en radio al inicio", "% en radio al fin"]
-        evo_r = (r.groupby("periodo").agg(**{cols_r[0]: ("en_radio_ini", "mean"), cols_r[1]: ("en_radio_fin", "mean")})
-                   .mul(100).reset_index())
-        fig_r = px.line(evo_r.melt("periodo", var_name="Métrica", value_name="%"), x="periodo", y="%",
-                        color="Métrica", markers=True, color_discrete_sequence=["#D32F2F", "#F9A825"])
+        st.subheader("Evolución diaria de la adherencia al radio")
+        evo_r = r.groupby("fecha")["en_radio_ini"].mean().mul(100).reset_index(name="% adherencia al radio")
+        evo_r["Día"] = evo_r["fecha"].dt.strftime("%d/%m")
+        fig_r = px.line(evo_r, x="Día", y="% adherencia al radio", markers=True, color_discrete_sequence=["#D32F2F"])
         fig_r.add_hline(y=objetivo_radio, line_dash="dash", line_color="green",
                         annotation_text=f"Objetivo {objetivo_radio}%")
-        piso = max(0, min(evo_r[cols_r].min().min(), objetivo_radio) - 5)
-        fig_r.update_layout(yaxis_range=[piso, 101], xaxis_title=frecuencia, yaxis_title="% en radio")
+        piso = max(0, min(evo_r["% adherencia al radio"].min(), objetivo_radio) - 5)
+        fig_r.update_layout(yaxis_range=[piso, 101], xaxis_title=None, yaxis_title="% adherencia al radio")
         st.plotly_chart(fig_r, use_container_width=True)
 
         fuera = r[r["en_radio_ini"] == 0]
