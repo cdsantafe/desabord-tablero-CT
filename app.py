@@ -394,12 +394,41 @@ with st.expander("Archivos incluidos"):
 st.sidebar.header("Filtros")
 frecuencia = st.sidebar.radio("Frecuencia", ["Diario", "Semanal", "Mensual"], horizontal=True)
 
+MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
+            "octubre", "noviembre", "diciembre"]
+iso = datos["fecha"].dt.isocalendar()
+datos["clave_sem"] = iso["year"].astype(int) * 100 + iso["week"].astype(int)     # año ISO + nº de semana
+datos["clave_mes"] = datos["fecha"].dt.year * 100 + datos["fecha"].dt.month        # año + nº de mes
+varios_anios = datos["fecha"].dt.year.nunique() > 1
+
+
+def etq_sem(k):
+    return f"Semana {k % 100}" + (f" ({k // 100})" if varios_anios else "")
+
+
+def etq_mes(k):
+    return f"Mes {k % 100} – {MESES_ES[k % 100 - 1]}" + (f" {k // 100}" if varios_anios else "")
+
+
+def rotulo(claves, nombre):
+    n = sorted(k % 100 for k in claves)
+    return f"{nombre} " + (", ".join(map(str, n)) if len(n) <= 6 else f"{n[0]} a {n[-1]}")
+
+
+modo = st.sidebar.radio("Filtrar por", ["Rango de fechas", "Semanas", "Meses"], horizontal=True)
 f_min, f_max = datos["fecha"].min().date(), datos["fecha"].max().date()
-rango = st.sidebar.date_input("Fecha / rango", value=(f_min, f_max), min_value=f_min, max_value=f_max)
-if isinstance(rango, tuple) and len(rango) == 2:
-    desde, hasta = rango
+if modo == "Rango de fechas":
+    rango = st.sidebar.date_input("Fecha / rango", value=(f_min, f_max), min_value=f_min, max_value=f_max)
+    if isinstance(rango, tuple) and len(rango) == 2:
+        desde, hasta = rango
+    else:
+        desde = hasta = rango[0] if isinstance(rango, tuple) else rango
+elif modo == "Semanas":
+    op_sem = sorted(datos["clave_sem"].unique())
+    sel_sem = st.sidebar.multiselect("Semanas completas (nº)", op_sem, default=op_sem, format_func=etq_sem)
 else:
-    desde = hasta = rango[0] if isinstance(rango, tuple) else rango
+    op_mes = sorted(datos["clave_mes"].unique())
+    sel_mes = st.sidebar.multiselect("Meses completos (nº)", op_mes, default=op_mes, format_func=etq_mes)
 
 choferes = sorted(datos["chofer"].unique())
 sel_ch = st.sidebar.multiselect("Chofer", choferes, default=choferes)
@@ -409,10 +438,13 @@ planillas = sorted(datos["planilla"].unique())
 sel_pl = st.sidebar.multiselect("Planilla (vacío = todas)", planillas, default=[])
 objetivo_radio = st.sidebar.number_input("Objetivo % adherencia al radio", 0, 100, OBJETIVO_RADIO_DEFECTO, 1)
 
-mask = (
-    (datos["fecha"].dt.date >= desde) & (datos["fecha"].dt.date <= hasta)
-    & datos["chofer"].isin(sel_ch) & datos["segmento"].isin(sel_seg)
-)
+if modo == "Rango de fechas":
+    mask = (datos["fecha"].dt.date >= desde) & (datos["fecha"].dt.date <= hasta)
+elif modo == "Semanas":
+    mask = datos["clave_sem"].isin(sel_sem)
+else:
+    mask = datos["clave_mes"].isin(sel_mes)
+mask &= datos["chofer"].isin(sel_ch) & datos["segmento"].isin(sel_seg)
 if sel_pl:
     mask &= datos["planilla"].isin(sel_pl)
 f = datos[mask].copy()                          # todas las visitas filtradas
@@ -422,7 +454,12 @@ if d.empty:
     st.stop()
 d = asignar_periodo(d, frecuencia)
 
-etiqueta = f"{desde:%d/%m/%Y}" if desde == hasta else f"{desde:%d/%m/%Y} - {hasta:%d/%m/%Y}"
+if modo == "Rango de fechas":
+    etiqueta = f"{desde:%d/%m/%Y}" if desde == hasta else f"{desde:%d/%m/%Y} - {hasta:%d/%m/%Y}"
+elif modo == "Semanas":
+    etiqueta = rotulo(sel_sem, "Semanas")
+else:
+    etiqueta = rotulo(sel_mes, "Meses")
 g2, g5 = pct(d["cumple_2"]), pct(d["cumple_5"])
 
 # Tabla de notificación por chofer (GENERAL arriba)
@@ -596,6 +633,18 @@ with tab4:
         except Exception as e:
             bj.warning(f"No se pudo generar la imagen: {e}")
 
+        st.subheader(f"Evolución de la adherencia al radio ({frecuencia.lower()})")
+        cols_r = ["% en radio al inicio", "% en radio al fin"]
+        evo_r = (r.groupby("periodo").agg(**{cols_r[0]: ("en_radio_ini", "mean"), cols_r[1]: ("en_radio_fin", "mean")})
+                   .mul(100).reset_index())
+        fig_r = px.line(evo_r.melt("periodo", var_name="Métrica", value_name="%"), x="periodo", y="%",
+                        color="Métrica", markers=True, color_discrete_sequence=["#D32F2F", "#F9A825"])
+        fig_r.add_hline(y=objetivo_radio, line_dash="dash", line_color="green",
+                        annotation_text=f"Objetivo {objetivo_radio}%")
+        piso = max(0, min(evo_r[cols_r].min().min(), objetivo_radio) - 5)
+        fig_r.update_layout(yaxis_range=[piso, 101], xaxis_title=frecuencia, yaxis_title="% en radio")
+        st.plotly_chart(fig_r, use_container_width=True)
+
         fuera = r[r["en_radio_ini"] == 0]
         if not fuera.empty:
             st.markdown("**Visitas fuera del radio**")
@@ -676,29 +725,44 @@ with tab5:
 # ----------------------------------------------------------------------
 with tab7:
     st.subheader("Tiempo de visita")
-    st.caption("Tiempo entre el inicio y el fin de la visita registrados en la app (FECHA_INICIO_VISITA → "
-               "FECHA_FIN_VISITA). Hoy es un indicador de seguimiento: la mayoría de las visitas dura segundos, "
-               "así que a futuro conviene medirlo con un evento más cercano a la entrega real.")
+    st.caption("Tiempo entre FECHA_INICIO_VISITA y FECHA_FIN_VISITA registrados en la app. Indicador de seguimiento, "
+               "a mejorar a futuro con un evento más cercano a la entrega real.")
     tv = d[d["fin_visita"].notna() & (d["t_visita_min"] >= 0)].copy()
     tope = st.number_input("Excluir visitas de más de (min), posibles errores de registro",
                            1, 1440, 180, 10, key="tv_tope")
     n_exc = int((tv["t_visita_min"] > tope).sum())
-    tv = tv[tv["t_visita_min"] <= tope]
-    if tv.empty:
-        st.info("No hay visitas con inicio y fin registrados para los filtros elegidos.")
-    else:
-        c = st.columns(5)
-        c[0].metric("Visitas medidas", f"{len(tv):,}".replace(",", "."))
-        c[1].metric("Mediana (mm:ss)", mmss(tv["t_visita_min"].median()))
-        c[2].metric("Promedio (min)", f"{tv['t_visita_min'].mean():.1f}")
-        c[3].metric("Percentil 90 (min)", f"{tv['t_visita_min'].quantile(.9):.1f}")
-        c[4].metric("Excluidas por el tope", n_exc)
+    tv = tv[tv["t_visita_min"] <= tope].copy()
+    tv["etq_cli"] = tv["cod_cliente"] + " - " + tv["cliente"].astype(str)
 
-        vista = st.radio("Ver por", ["Chofer", "Cliente"], horizontal=True, key="tv_vista")
+    vista = st.radio("Ver por", ["Chofer", "Cliente"], horizontal=True, key="tv_vista")
+    busq, min_vis = "", 1
+    if vista == "Cliente":
+        cb1, cb2 = st.columns([2, 1])
+        busq = cb1.text_input("Buscar cliente (nombre o código)", key="tv_busq").strip()
+        min_vis = cb2.number_input("Mínimo de visitas por cliente", 1, 50, 2, 1, key="tv_minvis")
+    cand = tv
+    if busq:
+        cand = tv[tv["etq_cli"].str.contains(busq, case=False, na=False, regex=False)]
+    conteo = cand.groupby("etq_cli").size()
+    conteo = conteo[conteo >= min_vis].sort_values(ascending=False)
+    # Filtro por clientes: las opciones son los clientes que aparecen en la tabla (ordenados por visitas)
+    sel_cli = st.multiselect("Filtrar por clientes de la tabla", list(conteo.index), key="tv_sel")
+    if sel_cli:
+        tv = tv[tv["etq_cli"].isin(sel_cli)]
+    elif vista == "Cliente":
+        tv = tv[tv["etq_cli"].isin(conteo.index)]
+
+    if tv.empty:
+        st.info("No hay visitas con inicio y fin registrados para esos criterios.")
+    else:
+        c = st.columns(4)
+        c[0].metric("Visitas medidas", f"{len(tv):,}".replace(",", "."))
+        c[1].metric("Promedio (mm:ss)", mmss(tv["t_visita_min"].mean()))
+        c[2].metric("Clientes", tv["etq_cli"].nunique())
+        c[3].metric("Excluidas por el tope", n_exc)
+
         cfg_t = {"Visitas": st.column_config.NumberColumn(format="%d"),
-                 "Mediana (min)": st.column_config.NumberColumn(format="%.2f"),
                  "Promedio (min)": st.column_config.NumberColumn(format="%.2f"),
-                 "P90 (min)": st.column_config.NumberColumn(format="%.2f"),
                  "Máx. (min)": st.column_config.NumberColumn(format="%.1f"),
                  "% < 1 min": st.column_config.NumberColumn(format="%.1f%%"),
                  "% ≥ 10 min": st.column_config.NumberColumn(format="%.1f%%")}
@@ -706,49 +770,35 @@ with tab7:
         def resumen_tiempos(df_, claves):
             g = df_.groupby(claves)["t_visita_min"]
             out = pd.DataFrame({
-                "Visitas": g.size(), "Mediana (min)": g.median(), "Promedio (min)": g.mean(),
-                "P90 (min)": g.quantile(0.9), "Máx. (min)": g.max(),
+                "Visitas": g.size(), "Promedio (min)": g.mean(), "Máx. (min)": g.max(),
                 "% < 1 min": g.apply(lambda x: (x < 1).mean() * 100),
                 "% ≥ 10 min": g.apply(lambda x: (x >= 10).mean() * 100),
             }).reset_index()
-            out.insert(len(claves) + 1, "Mediana (mm:ss)", out["Mediana (min)"].map(mmss))
+            out.insert(len(claves) + 1, "Promedio (mm:ss)", out["Promedio (min)"].map(mmss))
             return out
 
         if vista == "Chofer":
             tab_t = (resumen_tiempos(tv, ["chofer"]).rename(columns={"chofer": "CHOFER"})
-                     .sort_values("Mediana (min)", ascending=False))
+                     .sort_values("Promedio (min)", ascending=False))
         else:
-            cb1, cb2 = st.columns([2, 1])
-            busq = cb1.text_input("Buscar cliente (nombre o código)", key="tv_busq").strip()
-            min_vis = cb2.number_input("Mínimo de visitas por cliente", 1, 50, 2, 1, key="tv_minvis")
-            base_c = tv
-            if busq:
-                base_c = tv[tv["cliente"].astype(str).str.contains(busq, case=False, na=False, regex=False)
-                            | tv["cod_cliente"].str.contains(busq, na=False, regex=False)]
-            tab_t = resumen_tiempos(base_c, ["cod_cliente", "cliente"]) if len(base_c) else pd.DataFrame()
-            if not tab_t.empty:
-                ult = base_c.groupby(["cod_cliente", "cliente"])["fecha"].max().dt.strftime("%Y-%m-%d")
-                tab_t = tab_t.merge(ult.rename("Última visita").reset_index(), on=["cod_cliente", "cliente"])
-                tab_t = (tab_t[tab_t["Visitas"] >= min_vis]
-                         .rename(columns={"cod_cliente": "Código cliente", "cliente": "Cliente"})
-                         .sort_values("Mediana (min)", ascending=False))
-        if tab_t.empty:
-            st.info("No hay resultados con esos criterios.")
-        else:
-            st.dataframe(tab_t, use_container_width=True, hide_index=True, column_config=cfg_t)
-            st.download_button("⬇️ Descargar Excel", a_excel(tab_t.round(2)),
-                               f"tiempo_visita_por_{vista.lower()}.xlsx",
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="xl_tv")
+            tab_t = resumen_tiempos(tv, ["cod_cliente", "cliente"])
+            ult = tv.groupby(["cod_cliente", "cliente"])["fecha"].max().dt.strftime("%Y-%m-%d")
+            tab_t = (tab_t.merge(ult.rename("Última visita").reset_index(), on=["cod_cliente", "cliente"])
+                     .rename(columns={"cod_cliente": "Código cliente", "cliente": "Cliente"})
+                     .sort_values("Promedio (min)", ascending=False))
+        st.dataframe(tab_t, use_container_width=True, hide_index=True, column_config=cfg_t)
+        st.download_button("⬇️ Descargar Excel", a_excel(tab_t.round(2)),
+                           f"tiempo_visita_por_{vista.lower()}.xlsx",
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="xl_tv")
 
-        if vista == "Cliente" and busq and len(base_c):
-            st.markdown("**Detalle de visitas del cliente buscado**")
+        if vista == "Cliente" and (busq or sel_cli):
+            st.markdown("**Detalle de visitas**")
             det_c = pd.DataFrame({
-                "Fecha": base_c["fecha"].dt.strftime("%Y-%m-%d"), "Chofer": base_c["chofer"],
-                "Planilla": base_c["planilla"], "Código cliente": base_c["cod_cliente"],
-                "Cliente": base_c["cliente"], "Arribo": base_c["arribo"].dt.strftime("%H:%M:%S"),
-                "Fin": base_c["fin_visita"].dt.strftime("%H:%M:%S"),
-                "Tiempo (mm:ss)": base_c["t_visita_min"].map(mmss), "Tiempo (min)": base_c["t_visita_min"].round(2),
-            }).sort_values(["Fecha", "Arribo"])
+                "Fecha": tv["fecha"].dt.strftime("%Y-%m-%d"), "Chofer": tv["chofer"], "Planilla": tv["planilla"],
+                "Código cliente": tv["cod_cliente"], "Cliente": tv["cliente"],
+                "Arribo": tv["arribo"].dt.strftime("%H:%M:%S"), "Fin": tv["fin_visita"].dt.strftime("%H:%M:%S"),
+                "Tiempo (mm:ss)": tv["t_visita_min"].map(mmss), "Tiempo (min)": tv["t_visita_min"].round(2),
+            }).sort_values(["Fecha", "Arribo"]).head(2000)
             st.dataframe(det_c, use_container_width=True, hide_index=True)
 
         col_g1, col_g2 = st.columns(2)
@@ -761,10 +811,10 @@ with tab7:
                         text="Visitas", title="Distribución del tiempo de visita")
         fig_t1.update_layout(height=340, xaxis_title=None)
         col_g1.plotly_chart(fig_t1, use_container_width=True)
-        evo_t = (tv.groupby("periodo")["t_visita_min"].median().reset_index()
-                   .rename(columns={"t_visita_min": "Mediana (min)"}))
-        fig_t2 = px.line(evo_t, x="periodo", y="Mediana (min)", markers=True,
-                         color_discrete_sequence=["#D32F2F"], title=f"Mediana del tiempo de visita ({frecuencia.lower()})")
+        evo_t = (tv.groupby("periodo")["t_visita_min"].mean().reset_index()
+                   .rename(columns={"t_visita_min": "Promedio (min)"}))
+        fig_t2 = px.line(evo_t, x="periodo", y="Promedio (min)", markers=True, color_discrete_sequence=["#D32F2F"],
+                         title=f"Promedio del tiempo de visita ({frecuencia.lower()})")
         fig_t2.update_layout(height=340, xaxis_title=None)
         col_g2.plotly_chart(fig_t2, use_container_width=True)
 
@@ -775,6 +825,7 @@ with tab7:
             "Código cliente": top["cod_cliente"], "Cliente": top["cliente"],
             "Tiempo (mm:ss)": top["t_visita_min"].map(mmss), "Tiempo (min)": top["t_visita_min"].round(1)}),
             use_container_width=True, hide_index=True)
+
 
 # ----------------------------------------------------------------------
 # Devoluciones
